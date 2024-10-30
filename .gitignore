@@ -1,0 +1,11 @@
+# 忽略目录下的
+for_Save/
+.idea/
+train_test/agent_paths/
+train_test/model/
+train_test/runs/
+train_test/test1/agent_paths/
+train_test/test2/agent_paths/
+train_test/test3/agent_paths/
+train_test/test4/agent_paths/
+三个_actor的模型.zip
