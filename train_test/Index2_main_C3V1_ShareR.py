@@ -7,15 +7,15 @@ import copy
 from utils.replay_buffer import ReplayBuffer
 from utils.maddpg import MADDPG
 from utils.matd3_attention import MATD3
-from gym_pybullet_drones.envs.C3V1_Global_R import C3V1_GlobalReward    # 全局奖励
+from gym_pybullet_drones.envs.C3V1 import C3V1
 from gym_pybullet_drones.utils.enums import ObservationType, ActionType
 
-Env_name = 'c3v1A_GR'  # 'spread3d', 'simple_spread'
+Env_name = 'c3v1A_SR'  # 共享激励方法
 action = 'vel'
 observation = 'kin_target'  # 相比kin_target 观测会多一个Fs
 
 
-class Runner:   # 该文件是全局奖励时的C3V1
+class Runner:
     def __init__(self, args):
         self.args = args
         self.args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -26,15 +26,15 @@ class Runner:   # 该文件是全局奖励时的C3V1
         self.load_mark = None
         self.args.share_prob = 0.05  # 还是别共享了，有些无用
         Ctrl_Freq = args.Ctrl_Freq  # 30
-        self.env = C3V1_GlobalReward(gui=False, num_drones=args.N_drones, obs=ObservationType(observation),
-                                     act=ActionType(action),
-                                     ctrl_freq=Ctrl_Freq,  # 这个值越大，仿真看起来越慢，应该是由于频率变高，速度调整的更小了
-                                     need_target=True, obs_with_act=True)
-        self.env_evaluate = C3V1_GlobalReward(gui=False, num_drones=args.N_drones,
-                                              obs=ObservationType(observation),
-                                              act=ActionType(action),
-                                              ctrl_freq=Ctrl_Freq,
-                                              need_target=True, obs_with_act=True)
+        self.env = C3V1(gui=False, num_drones=args.N_drones, obs=ObservationType(observation),
+                        act=ActionType(action),
+                        ctrl_freq=Ctrl_Freq,  # 这个值越大，仿真看起来越慢，应该是由于频率变高，速度调整的更小了
+                        need_target=True, obs_with_act=True)
+        self.env_evaluate = C3V1(gui=False, num_drones=args.N_drones,
+                                 obs=ObservationType(observation),
+                                 act=ActionType(action),
+                                 ctrl_freq=Ctrl_Freq,
+                                 need_target=True, obs_with_act=True)
         self.timestep = 1 / Ctrl_Freq  # 计算每个步骤的时间间隔 0.003
         self.args.obs_dim_n = [self.env.observation_space[i].shape[0] for i in
                                range(self.args.N_drones)]  # obs dimensions of N agents
@@ -53,7 +53,7 @@ class Runner:   # 该文件是全局奖励时的C3V1
             self.agent_n = [MADDPG(self.args, agent_id) for agent_id in range(args.N_drones)]
         elif self.args.algorithm == "MATD3":
             print("Algorithm: MATD3")
-            self.agent_n = [MATD3(self.args, agent_id) for agent_id in range(args.N_drones)]  # 去掉共享的critic
+            self.agent_n = [MATD3(self.args, agent_id) for agent_id in range(args.N_drones)]
         else:
             print("Wrong!!!")
         self.replay_buffer = ReplayBuffer(self.args)
@@ -164,7 +164,7 @@ if __name__ == '__main__':
     parser.add_argument("--batch_size", type=int, default=1024, help="Batch size")  # 1024-》4048
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument("--noise_std_init", type=float, default=0.05, help="The std of Gaussian noise for exploration")
+    parser.add_argument("--noise_std_init", type=float, default=0.1, help="The std of Gaussian noise for exploration")
     parser.add_argument("--noise_std_min", type=float, default=0, help="The std of Gaussian noise for exploration")
     parser.add_argument("--noise_decay_steps", type=float, default=3e5,
                         help="How many steps before the noise_std decays to the minimum")

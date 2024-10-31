@@ -9,3 +9,6 @@ from gym_pybullet_drones.envs.CircleSpread import CircleSpreadAviary
 from gym_pybullet_drones.envs.C3V1_CommBaseAviary import C3V1_CommBaseAviary
 from gym_pybullet_drones.envs.C3V1RLAviary import C3V1RLAviary
 from gym_pybullet_drones.envs.C3V1 import C3V1
+from gym_pybullet_drones.envs.A3O3RL import A3o3RL
+from gym_pybullet_drones.envs.A3O3Base import A3o3Base
+from gym_pybullet_drones.envs.A3O3 import A3o3

@@ -62,8 +62,8 @@ class C3V1_Comm(C3V1_CommRLAviary):
 
         rewards += 20 * np.power(20, -dis_to_target[:, -1])  # 距离目标奖励
         rewards -= 0.1 * v  # 速度惩罚
-        rewards += np.sum(velocity * dis_to_target[:, :3], axis=1) / (v * dis_to_target[:, -1])  # 相似度奖励
-        rewards += 3 * np.power(20, -np.abs(dis_to_target[:, 2]))  # 高度奖励
+        rewards += 5 * np.sum(velocity * dis_to_target[:, :3], axis=1) / (v * dis_to_target[:, -1])  # 相似度奖励
+        rewards += 10 * np.power(20, -np.abs(dis_to_target[:, 2]))  # 高度奖励
         # rewards -= 0.1* np.linalg.norm(velocity - self.last_v, axis=1) / np.where(v > 0, v, 1)  # 加速度惩罚
         # angular_velocity = np.linalg.norm(np.array([state['ang_vel'] for state in states.values()]), axis=1)
         # rewards -= 0.5 * angular_velocity  # 角速度惩罚
@@ -72,7 +72,7 @@ class C3V1_Comm(C3V1_CommRLAviary):
         if self.NUM_DRONES > 1:
             other_pos_dis = np.array([state['other_pos_dis'] for state in states.values()])
             dist_between_drones = other_pos_dis[:, 3::4]  # 获取距离
-            rewards -= np.sum(100 * np.power(5, (-4 * dist_between_drones - 1)) - 0.2, axis=1)
+            rewards -= 2 * np.sum(100 * np.power(5, (-4 * dist_between_drones - 1)) - 0.2, axis=1)
         return rewards
 
     ################################################################################

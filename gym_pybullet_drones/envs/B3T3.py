@@ -1,10 +1,12 @@
+import copy
+
 import numpy as np
-from gym_pybullet_drones.envs.C3V1RLAviary import C3V1RLAviary
+from gym_pybullet_drones.envs.B3T3RL import B3T3RL
 from gym_pybullet_drones.utils.enums import DroneModel, Physics, ActionType, ObservationType
 
 
-class C3V1(C3V1RLAviary):
-    """Multi-agent RL problem: 3 VS 1 3d."""
+class B3T3(B3T3RL):
+    """Multi-agent RL problem: 3 Transport 3 Paths 3d."""
     def __init__(self,
                  drone_model: DroneModel = DroneModel.CF2X,
                  num_drones: int = 1,
@@ -61,18 +63,22 @@ class C3V1(C3V1RLAviary):
         v = np.linalg.norm(velocity, axis=1)  # 计算速度的 L2 范数
 
         rewards += 20 * np.power(20, -dis_to_target[:, -1])  # 距离目标奖励
-        rewards -= 0.1 * v  # 速度惩罚
+        rewards -= v  # 速度惩罚
         rewards += 5 * np.sum(velocity * dis_to_target[:, :3], axis=1) / (v * dis_to_target[:, -1])  # 相似度奖励
-        rewards += 10 * np.power(20, -np.abs(dis_to_target[:, 2]))  # 高度奖励
+        # rewards += 10 * np.power(20, -np.abs(dis_to_target[:, 2]))  # 高度奖励
         # rewards -= 0.1* np.linalg.norm(velocity - self.last_v, axis=1) / np.where(v > 0, v, 1)  # 加速度惩罚
         # angular_velocity = np.linalg.norm(np.array([state['ang_vel'] for state in states.values()]), axis=1)
         # rewards -= 0.5 * angular_velocity  # 角速度惩罚
+        for k in range(self.NUM_DRONES):    # 添加到环境奖励中，满足条件获得高奖励
+            if self.to_target[k] <= 0.2:
+                self.TARGET_POS2[k], self.TARGET_POS[k] = copy.deepcopy(self.TARGET_POS[k]), copy.deepcopy(self.TARGET_POS2[k])
+                rewards[k] += 100
 
         # 队友保持距离与碰撞惩罚
         if self.NUM_DRONES > 1:
             other_pos_dis = np.array([state['other_pos_dis'] for state in states.values()])
             dist_between_drones = other_pos_dis[:, 3::4]  # 获取距离
-            rewards -= 2 * np.sum(100 * np.power(5, (-4 * dist_between_drones - 1)) - 0.2, axis=1)
+            rewards -= np.sum(100 * np.power(5, (-4 * dist_between_drones - 1)) - 0.2, axis=1)
         return rewards
 
     ################################################################################
@@ -81,13 +87,9 @@ class C3V1(C3V1RLAviary):
         punish = [0.0 for _ in range(self.NUM_DRONES)]  # Use a floating-point value for dynamic punish
         for i in range(self.NUM_DRONES):
             state = self._getDroneStateVector(i, True)
-            x, y, z = state['pos']
+            _, _, z = state['pos']
             dis = state['target_pos_dis'][3]
             roll, pitch, _ = state['rpy']
-
-            if dis < 0.05:
-                # dones[i] = True
-                punish[i] -= 20
             if z > 5 or z < -0.1 or dis > 10:  # 检查出界
                 punish[i] = 10
             if abs(roll) > 0.4 or abs(pitch) > 0.4:     # 姿态惩罚

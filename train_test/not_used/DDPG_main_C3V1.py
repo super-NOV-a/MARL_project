@@ -5,12 +5,12 @@ from torch.utils.tensorboard import SummaryWriter
 import argparse
 import copy
 from utils.replay_buffer import ReplayBuffer
-from utils.maddpg import MADDPG
-from utils.matd3_attention import MATD3
-from gym_pybullet_drones.envs.C3V1_Comm import C3V1_Comm
+from utils.ddpg import DDPG
+from utils.matd3 import MATD3
+from gym_pybullet_drones.envs.C3V1 import C3V1
 from gym_pybullet_drones.utils.enums import ObservationType, ActionType
 
-Env_name = 'c3v1Comm'  # 'spread3d', 'simple_spread'
+Env_name = 'c3v1ddpg'  # 'spread3d', 'simple_spread'
 action = 'vel'
 observation = 'kin_target'  # 相比kin_target 观测会多一个Fs
 
@@ -26,15 +26,15 @@ class Runner:
         self.load_mark = None
         self.args.share_prob = 0.05  # 还是别共享了，有些无用
         Ctrl_Freq = args.Ctrl_Freq  # 30
-        self.env = C3V1_Comm(gui=False, num_drones=args.N_drones, obs=ObservationType(observation),
-                             act=ActionType(action),
-                             ctrl_freq=Ctrl_Freq,  # 这个值越大，仿真看起来越慢，应该是由于频率变高，速度调整的更小了
-                             need_target=True, obs_with_act=True)
-        self.env_evaluate = C3V1_Comm(gui=False, num_drones=args.N_drones,
-                                      obs=ObservationType(observation),
-                                      act=ActionType(action),
-                                      ctrl_freq=Ctrl_Freq,
-                                      need_target=True, obs_with_act=True)
+        self.env = C3V1(gui=False, num_drones=args.N_drones, obs=ObservationType(observation),
+                        act=ActionType(action),
+                        ctrl_freq=Ctrl_Freq,  # 这个值越大，仿真看起来越慢，应该是由于频率变高，速度调整的更小了
+                        need_target=True, obs_with_act=True)
+        self.env_evaluate = C3V1(gui=False, num_drones=args.N_drones,
+                                 obs=ObservationType(observation),
+                                 act=ActionType(action),
+                                 ctrl_freq=Ctrl_Freq,
+                                 need_target=True, obs_with_act=True)
         self.timestep = 1 / Ctrl_Freq  # 计算每个步骤的时间间隔 0.003
         self.args.obs_dim_n = [self.env.observation_space[i].shape[0] for i in
                                range(self.args.N_drones)]  # obs dimensions of N agents
@@ -48,12 +48,12 @@ class Runner:
         torch.manual_seed(self.seed)
 
         # Create N agents
-        if self.args.algorithm == "MADDPG":
-            print("Algorithm: MADDPG")
-            self.agent_n = [MADDPG(self.args, agent_id) for agent_id in range(args.N_drones)]
+        if self.args.algorithm == "DDPG":
+            print("Algorithm: DDPG")
+            self.agent_n = [DDPG(self.args, agent_id) for agent_id in range(args.N_drones)]
         elif self.args.algorithm == "MATD3":
             print("Algorithm: MATD3")
-            self.agent_n = [MATD3(self.args, agent_id) for agent_id in range(args.N_drones)]  # 去掉共享的critic
+            self.agent_n = [MATD3(self.args, agent_id) for agent_id in range(args.N_drones)]    # 去掉共享的critic
         else:
             print("Wrong!!!")
         self.replay_buffer = ReplayBuffer(self.args)
@@ -88,15 +88,12 @@ class Runner:
                 actions_n = [agent.choose_action(obs, noise_std=self.noise_std) for agent, obs in
                              zip(self.agent_n, obs_n)]
                 obs_next_n, rewards_n, done_n, _, _ = self.env.step(copy.deepcopy(actions_n))  # gym new api
-                # obs_next_n = self.convert_wrap(obs_next_n)
-
                 self.replay_buffer.store_transition(obs_n, actions_n, rewards_n, obs_next_n, done_n)
                 obs_n = obs_next_n
                 episode_total_reward += np.mean(rewards_n)  # 当前episode的总奖励
                 agent_rewards = [cumulative_reward + reward for cumulative_reward, reward in
                                  zip(agent_rewards, rewards_n)]  # 每个智能体的累计奖励
                 self.total_steps += 1
-
                 if self.args.use_noise_decay:
                     self.noise_std = self.noise_std - self.args.noise_std_decay if self.noise_std - self.args.noise_std_decay > self.args.noise_std_min else self.args.noise_std_min
 
@@ -104,14 +101,13 @@ class Runner:
                     # self.evaluate_policy()
                     self.save_model()  # 评估中实现save了
                     obs_n, _ = self.env.reset()  # gym new api
-
                 if all(done_n):
                     break
 
             if self.replay_buffer.current_size > self.args.batch_size:
                 for _ in range(50):
                     for agent_id in range(self.args.N_drones):
-                        self.agent_n[agent_id].train(self.replay_buffer, self.agent_n)
+                        self.agent_n[agent_id].train(self.replay_buffer, agent_id)
 
             print(f"total_steps:{self.total_steps} \t episode_total_reward:{int(episode_total_reward)} \t "
                   f"noise_std:{self.noise_std}")
@@ -149,7 +145,7 @@ def check_create_dir(env_name, model_dir):
 
 
 if __name__ == '__main__':
-    check_create_dir(Env_name, 'model')
+    check_create_dir(Env_name, '../model')
     parser = argparse.ArgumentParser("Hyperparameters Setting for MADDPG and MATD3 in MPE environment")
     parser.add_argument("--max_train_steps", type=int, default=int(1e6), help=" Maximum number of training steps")
     parser.add_argument("--episode_limit", type=int, default=1000, help="Maximum number of steps per episode")
@@ -159,12 +155,12 @@ if __name__ == '__main__':
     parser.add_argument("--evaluate_times", type=float, default=1, help="Evaluate times")
     parser.add_argument("--max_action", type=float, default=1.0, help="Max action")
 
-    parser.add_argument("--algorithm", type=str, default="MATD3", help="MADDPG or MATD3")
+    parser.add_argument("--algorithm", type=str, default="DDPG", help="DDPG, MADDPG or MATD3")
     parser.add_argument("--buffer_size", type=int, default=int(1e6), help="The capacity of the replay buffer")
     parser.add_argument("--batch_size", type=int, default=1024, help="Batch size")  # 1024-》4048
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument("--noise_std_init", type=float, default=0.05, help="The std of Gaussian noise for exploration")
+    parser.add_argument("--noise_std_init", type=float, default=0.1, help="The std of Gaussian noise for exploration")
     parser.add_argument("--noise_std_min", type=float, default=0, help="The std of Gaussian noise for exploration")
     parser.add_argument("--noise_decay_steps", type=float, default=3e5,
                         help="How many steps before the noise_std decays to the minimum")

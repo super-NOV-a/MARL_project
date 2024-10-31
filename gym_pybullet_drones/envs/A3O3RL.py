@@ -3,12 +3,12 @@ import numpy as np
 import pybullet as p
 from gymnasium import spaces
 from collections import deque
-from gym_pybullet_drones.envs.A3O1Base import A3o1Base
+from gym_pybullet_drones.envs.A3O3Base import A3o3Base
 from gym_pybullet_drones.utils.enums import DroneModel, Physics, ActionType, ObservationType, ImageType
 from gym_pybullet_drones.control.DSLPIDControl import DSLPIDControl
 
 
-class A3o1RL(A3o1Base):
+class A3o3RL(A3o3Base):
     """Lyy Base single and multi-agent environment class for reinforcement learning.
         Note : 无人机最优的位置应该是一个环上!!!
     """

@@ -1,64 +1,19 @@
 import os
-import pickle
 import torch
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 import argparse
-import copy
-from utils.replay_buffer_p import ReplayBuffer
+from utils.replay_buffer import ReplayBuffer
 from utils.maddpg import MADDPG
-from utils.matd3_graph import MATD3
-from gym_pybullet_drones.envs.C3V1 import C3V1
+from utils.matd3_attention import MATD3
+import copy
+from gym_pybullet_drones.envs.Obstacle import Obstacle
 from gym_pybullet_drones.utils.enums import ObservationType, ActionType
 
-Env_name = 'c3v1G'  # 'spread3d', 'simple_spread'  c3v1G是GAT,c3v1G2是GCN，记得修改网络结构,G3是加权GCN
+Env_name = 'obstacle'  # 'spread3d', 'simple_spread'
 action = 'vel'
-observation = 'kin_target'  # 相比kin_target 观测会多一个Fs
-# 现在将观测范围增加到[-5,5]吧
-is_normed = False
-
-
-class Normalizer:
-    def __init__(self, shape, epsilon=1e-5):
-        self.mean = np.zeros(shape, dtype=np.float32)  # 初始化均值
-        self.var = np.ones(shape, dtype=np.float32)  # 初始化方差
-        self.count = epsilon  # 防止除以0
-        self.epsilon = epsilon  # 用于数值稳定
-
-    def update(self, x):
-        """
-        动态更新观测的均值和方差
-        x: 当前观测
-        """
-        batch_mean = np.mean(x, axis=0)
-        batch_var = np.var(x, axis=0)
-        batch_count = x.shape[0]
-
-        self.mean, self.var, self.count = self._update_mean_var_count(self.mean, self.var, self.count,
-                                                                      batch_mean, batch_var, batch_count)
-
-    def _update_mean_var_count(self, mean, var, count, batch_mean, batch_var, batch_count):
-        """
-        采用合并更新均值和方差的方法
-        """
-        delta = batch_mean - mean
-        new_count = count + batch_count
-
-        new_mean = mean + delta * batch_count / new_count
-        m_a = var * count
-        m_b = batch_var * batch_count
-        m2 = m_a + m_b + np.square(delta) * count * batch_count / new_count
-        new_var = m2 / new_count
-
-        return new_mean, new_var, new_count
-
-    def normalize(self, x):
-        """归一化观测"""
-        return (x - self.mean) / (np.sqrt(self.var) + self.epsilon)
-
-    def denormalize(self, x):
-        """反归一化观测"""
-        return x * np.sqrt(self.var) + self.mean
+observation = 'kin_target'
+# obstacle中的pos由原本的无人机位置修改为了距离障碍的距离倒数,该环境直接导入了circle训练的模型
 
 
 class Runner:
@@ -69,19 +24,31 @@ class Runner:
         self.number = args.N_drones
         self.seed = 1145  # 保证一个seed，名称使用记号--mark
         self.mark = args.mark
-        self.load_mark = None   # 9235
+        self.load_mark = None
         self.args.share_prob = 0.05  # 还是别共享了，有些无用
+        args.N_obstacle = 5  # 障碍数量
+        # Create env
         Ctrl_Freq = args.Ctrl_Freq  # 30
-        self.env = C3V1(gui=True, num_drones=args.N_drones, obs=ObservationType(observation),
-                        act=ActionType(action),
-                        ctrl_freq=Ctrl_Freq,  # 这个值越大，仿真看起来越慢，应该是由于频率变高，速度调整的更小了
-                        need_target=True, obs_with_act=True, all_axis=2)
+        self.env = Obstacle(gui=False, num_drones=args.N_drones, num_obstacle=args.N_obstacle,
+                            obs=ObservationType(observation),
+                            act=ActionType(action),
+                            ctrl_freq=Ctrl_Freq,  # 这个值越大，仿真看起来越慢，应该是由于频率变高，速度调整的更小了
+                            need_target=True, obs_with_act=True)
+        self.env_evaluate = Obstacle(gui=False, num_drones=args.N_drones, num_obstacle=args.N_obstacle,
+                                     obs=ObservationType(observation),
+                                     act=ActionType(action),
+                                     ctrl_freq=Ctrl_Freq,
+                                     need_target=True, obs_with_act=True)
         self.timestep = 1 / Ctrl_Freq  # 计算每个步骤的时间间隔 0.003
+
+        # self.env.observation_space.shape = box[N,78]
         self.args.obs_dim_n = [self.env.observation_space[i].shape[0] for i in
                                range(self.args.N_drones)]  # obs dimensions of N agents
         self.args.action_dim_n = [self.env.action_space[i].shape[0] for i in
                                   range(self.args.N_drones)]  # actions dimensions of N agents
+        # print("observation_space=", self.env.observation_space)
         print(f"obs_dim_n={self.args.obs_dim_n}")
+        # print("action_space=", self.env.action_space)
         print(f"action_dim_n={self.args.action_dim_n}")
 
         # Set random seed
@@ -107,74 +74,46 @@ class Runner:
         self.total_steps = 0
         self.noise_std = self.args.noise_std_init  # Initialize noise_std
 
-        if self.load_mark is not None:
-            for agent_id in range(self.args.N_drones):
-                # 加载模型参数
-                model_path = "./model/{}/{}_actor_mark_{}_number_{}_step_{}k_agent_{}.pth".format(self.env_name,
-                                                                                                  self.args.algorithm,
-                                                                                                  self.load_mark,
-                                                                                                  self.number,
-                                                                                                  int(15000),
-                                                                                                  agent_id)  # agent_id
-                self.agent_n[agent_id].actor.load_state_dict(torch.load(model_path))
+        # 加载训练好的模型
+        for agent_id in range(self.args.N_drones):
+            # 加载模型参数
+            model_path = "./model/circleA/MATD3_actor_mark_{}_number_{}_step_{}k_agent_{}.pth".format(
+                                                                                              9200, self.number,
+                                                                                              int(10000),
+                                                                                              agent_id)  # agent_id
+            self.agent_n[agent_id].actor.load_state_dict(torch.load(model_path))
 
-    def run(self):
-        if is_normed:
-            print('使用了观测是Normalization')
-            normalizers = [Normalizer(shape=28) for _ in range(self.args.N_drones)]  # 每个智能体一个归一化器
-
+    def run(self, ):
         while self.total_steps < self.args.max_train_steps:
             obs_n, _ = self.env.reset()  # gym new api
-            if is_normed:
-                # 动态更新均值和方差
-                for i, obs in enumerate(obs_n):
-                    normalizers[i].update(obs)
-                # 对观测进行归一化
-                obs_n = [normalizers[i].normalize(obs) for i, obs in enumerate(obs_n)]
-
-            episode_total_reward = 0  # 当前episode的总奖励
-            agent_rewards = [0] * self.args.N_drones  # 每个智能体的累计奖励
+            episode_total_reward = 0  # 改进：train_reward -> episode_total_reward，表示当前episode的总奖励
+            agent_rewards = [0] * self.args.N_drones  # 改进：rewards_n -> agent_rewards，表示每个智能体的累计奖励
 
             for count in range(self.args.episode_limit):
-                # 选择动作
+
                 actions_n = [agent.choose_action(obs, noise_std=self.noise_std) for agent, obs in
                              zip(self.agent_n, obs_n)]
-
-                # 执行动作并获取新的观测和奖励
                 obs_next_n, rewards_n, done_n, _, _ = self.env.step(copy.deepcopy(actions_n))  # gym new api
-                if is_normed:
-                    # 更新新观测的均值和方差并归一化
-                    for i, obs_next in enumerate(obs_next_n):
-                        normalizers[i].update(obs_next)
-                    obs_next_n = [normalizers[i].normalize(obs_next) for i, obs_next in enumerate(obs_next_n)]
+                # obs_next_n = self.convert_wrap(obs_next_n)
 
-                # 存储经验
                 self.replay_buffer.store_transition(obs_n, actions_n, rewards_n, obs_next_n, done_n)
                 obs_n = obs_next_n
-
-                # 更新奖励
-                episode_total_reward += np.mean(rewards_n)
+                episode_total_reward += np.mean(rewards_n)  # 当前episode的总奖励
                 agent_rewards = [cumulative_reward + reward for cumulative_reward, reward in
-                                 zip(agent_rewards, rewards_n)]
+                                 zip(agent_rewards, rewards_n)]  # 每个智能体的累计奖励
                 self.total_steps += 1
 
-                # 噪声衰减
                 if self.args.use_noise_decay:
-                    self.noise_std = max(self.noise_std - self.args.noise_std_decay, self.args.noise_std_min)
+                    self.noise_std = self.noise_std - self.args.noise_std_decay if self.noise_std - self.args.noise_std_decay > self.args.noise_std_min else self.args.noise_std_min
 
-                # 保存模型
                 if self.total_steps % self.args.evaluate_freq == 0:
-                    self.save_model()
+                    # self.evaluate_policy()
+                    self.save_model()  # 评估中实现save了
                     obs_n, _ = self.env.reset()  # gym new api
-                    if is_normed:
-                        for i, obs in enumerate(obs_n):
-                            normalizers[i].update(obs)
-                        obs_n = [normalizers[i].normalize(obs) for i, obs in enumerate(obs_n)]
 
                 if all(done_n):
                     break
 
-            # 训练
             if self.replay_buffer.current_size > self.args.batch_size:
                 for _ in range(50):
                     for agent_id in range(self.args.N_drones):
@@ -189,27 +128,47 @@ class Runner:
 
             self.writer.add_scalar(f'train_step_rewards_{self.env_name}', int(episode_total_reward),
                                    global_step=self.total_steps)
-        if is_normed:
-            self.save_normalizers('./model/normalizers.pkl', normalizers)
+
         self.env.close()
+        self.env_evaluate.close()
+
+    def evaluate_policy(self, ):
+        evaluate_reward = 0
+        for _ in range(self.args.evaluate_times):
+            obs_n, _ = self.env_evaluate.reset()
+            episode_reward = 0
+            a = self.agent_n[0].choose_action(obs_n[0], 0)
+            for _ in range(self.args.test_episode_limit):
+
+                a_n = [agent.choose_action(obs, noise_std=0) for agent, obs in
+                       zip(self.agent_n, obs_n)]  # We do not add noise when evaluating
+                obs_next_n, r_n, done_n, _, _ = self.env_evaluate.step(copy.deepcopy(a_n))
+                episode_reward += np.mean(r_n)  # 修改为均值
+                obs_n = obs_next_n
+
+                if all(done_n):
+                    break
+            evaluate_reward += episode_reward
+
+        evaluate_reward = evaluate_reward / self.args.evaluate_times
+        self.evaluate_rewards.append(evaluate_reward)
+        # print("total_steps:{} \t evaluate_reward:{} \t noise_std:{}".format(self.total_steps, evaluate_reward,
+        #                                                                     self.noise_std))
+        # self.writer.add_scalar('evaluate_step_rewards_{}'.format(self.env_name), evaluate_reward,
+        #                        global_step=self.total_steps)
+        # Save the rewards and models
+        # np.save('./data_train/{}_env_{}_number_{}_seed_{}.npy'.format(self.args.algorithm, self.env_name, self.number,
+        #                                                               self.seed), np.array(self.evaluate_rewards))
+        for agent_id in range(self.args.N_drones):
+            self.agent_n[agent_id].save_model(self.env_name, self.args.algorithm, self.mark, self.number,
+                                              self.total_steps,
+                                              agent_id)
 
     def save_model(self):
         for agent_id in range(self.args.N_drones):
             self.agent_n[agent_id].save_model(self.env_name, self.args.algorithm, self.mark, self.number,
                                               self.total_steps,
                                               agent_id)
-
-    def save_normalizers(self, filepath, normalizers):
-        normalizer_data = [{"mean": normalizer.mean, "var": normalizer.var} for normalizer in normalizers]
-        with open(filepath, 'wb') as f:
-            pickle.dump(normalizer_data, f)
-
-    def load_normalizers(self, filepath, normalizers):
-        with open(filepath, 'rb') as f:
-            normalizer_data = pickle.load(f)
-        for i, data in enumerate(normalizer_data):
-            normalizers[i].mean = data['mean']
-            normalizers[i].var = data['var']
 
 
 def check_create_dir(env_name, model_dir):
@@ -228,11 +187,11 @@ def check_create_dir(env_name, model_dir):
 
 
 if __name__ == '__main__':
-    check_create_dir(Env_name, 'model')
+    check_create_dir(Env_name, '../model')
     parser = argparse.ArgumentParser("Hyperparameters Setting for MADDPG and MATD3 in MPE environment")
     parser.add_argument("--max_train_steps", type=int, default=int(1e6), help=" Maximum number of training steps")
     parser.add_argument("--episode_limit", type=int, default=1000, help="Maximum number of steps per episode")
-    parser.add_argument("--test_episode_limit", type=int, default=2000, help="Maximum number of steps per test episode")
+    parser.add_argument("--test_episode_limit", type=int, default=1000, help="Maximum number of steps per test episode")
     parser.add_argument("--evaluate_freq", type=float, default=100000,
                         help="Evaluate the policy every 'evaluate_freq' steps")
     parser.add_argument("--evaluate_times", type=float, default=1, help="Evaluate times")
@@ -243,13 +202,13 @@ if __name__ == '__main__':
     parser.add_argument("--batch_size", type=int, default=1024, help="Batch size")  # 1024-》4048
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument("--noise_std_init", type=float, default=0.1, help="The std of Gaussian noise for exploration")
-    parser.add_argument("--noise_std_min", type=float, default=0, help="The std of Gaussian noise for exploration")
+    parser.add_argument("--noise_std_init", type=float, default=0.02, help="The std of Gaussian noise for exploration")
+    parser.add_argument("--noise_std_min", type=float, default=0.005, help="The std of Gaussian noise for exploration")
     parser.add_argument("--noise_decay_steps", type=float, default=3e5,
                         help="How many steps before the noise_std decays to the minimum")
     parser.add_argument("--use_noise_decay", type=bool, default=True, help="Whether to decay the noise_std")
-    parser.add_argument("--lr_a", type=float, default=1e-4, help="Learning rate of actor")
-    parser.add_argument("--lr_c", type=float, default=1e-4, help="Learning rate of critic")
+    parser.add_argument("--lr_a", type=float, default=5e-4, help="Learning rate of actor")
+    parser.add_argument("--lr_c", type=float, default=5e-4, help="Learning rate of critic")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--tau", type=float, default=0.01, help="Softly update the target network")
     parser.add_argument("--use_orthogonal_init", type=bool, default=True, help="Orthogonal initialization")

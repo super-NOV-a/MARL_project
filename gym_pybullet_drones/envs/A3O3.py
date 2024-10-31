@@ -1,10 +1,10 @@
 import numpy as np
-from gym_pybullet_drones.envs.A3O1RL import A3o1RL
+from gym_pybullet_drones.envs.A3O3RL import A3o3RL
 from gym_pybullet_drones.utils.enums import DroneModel, Physics, ActionType, ObservationType
 
 
-class A3o1(A3o1RL):
-    """Multi-agent RL problem: 3 VS 1 3d."""
+class A3o3(A3o3RL):
+    """Multi-agent RL problem: 3 Occupy 3 Points 3d."""
     def __init__(self,
                  drone_model: DroneModel = DroneModel.CF2X,
                  num_drones: int = 1,
@@ -60,9 +60,9 @@ class A3o1(A3o1RL):
         velocity = np.array([state['vel'] for state in states.values()])  # 3
         v = np.linalg.norm(velocity, axis=1)  # 计算速度的 L2 范数
 
-        rewards += 10 * np.power(20, -dis_to_target[:, -1])  # 距离目标奖励
-        rewards -= 0.1 * v  # 速度惩罚
-        rewards += 5 * np.sum(velocity * dis_to_target[:, :3], axis=1) / (v * dis_to_target[:, -1])  # 相似度奖励
+        rewards += 30 * np.power(20, -dis_to_target[:, -1])  # 距离目标奖励
+        rewards -= 10 * v  # 速度惩罚
+        rewards += np.sum(velocity * dis_to_target[:, :3], axis=1) / (v * dis_to_target[:, -1])  # 相似度奖励
         rewards += 10 * np.power(20, -np.abs(dis_to_target[:, 2]))  # 高度奖励
         # rewards -= 0.1* np.linalg.norm(velocity - self.last_v, axis=1) / np.where(v > 0, v, 1)  # 加速度惩罚
         # angular_velocity = np.linalg.norm(np.array([state['ang_vel'] for state in states.values()]), axis=1)

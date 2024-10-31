@@ -1,8 +1,10 @@
+import copy
 import os
 import random
 import time
 from datetime import datetime
 import xml.etree.ElementTree as etxml
+from pprint import pprint
 import pkg_resources
 from PIL import Image
 import numpy as np
@@ -22,12 +24,9 @@ def generate_non_overlapping_positions_numpy(scale=1.0):
     返回:
     list: 生成的位置列表，每个位置为(x, y, z)的元组。
     """
-    # 单元格大小固定为0.4
-    cell_size = 0.5
-    # 计算新的总范围
-    total_range = 2 * scale
+    cell_size = 0.5  # 单元格大小固定为0.4
+    total_range = 2 * scale  # 计算新的总范围
     divisions = int(total_range / cell_size)
-
     # 生成所有可能的单元格坐标
     cell_coordinates = np.array(
         [(x, y) for x in range(divisions) for y in range(divisions)])
@@ -36,26 +35,15 @@ def generate_non_overlapping_positions_numpy(scale=1.0):
     for cell_coord in cell_coordinates:  # 在每个单元格内随机生成一个位置
         x = np.random.uniform(cell_coord[0] * cell_size - scale, (cell_coord[0] + 1) * cell_size - scale)
         y = np.random.uniform(cell_coord[1] * cell_size - scale, (cell_coord[1] + 1) * cell_size - scale)
-        z = np.random.uniform(0.2, 1.2)  # 保持z范围不变
+        z = np.random.uniform(0., 2.)  # 保持z范围不变
         positions.append((x, y, z))
     return positions
 
 
-# 例子
-# positions = generate_non_overlapping_positions_numpy(scale=2)
-
-
-class ObstacleBaseAviary(gym.Env):
-    """Base class for "drone aviary" Gym environments."""
-
-    # metadata = {'render.modes': ['human']}
-
-    ################################################################################
-
+class B3T3Base(gym.Env):
     def __init__(self,
                  drone_model: DroneModel = DroneModel.CF2X,
                  num_drones: int = 1,
-                 num_obstacle: int = 1,
                  neighbourhood_radius: float = np.inf,
                  initial_xyzs=None,
                  initial_rpys=None,
@@ -69,40 +57,10 @@ class ObstacleBaseAviary(gym.Env):
                  vision_attributes=False,
                  output_folder='results',
                  need_target=False,
-                 obs_with_act=False
+                 obs_with_act=False,
+                 all_axis=2,
                  ):
-        """Initialization of a generic aviary environment.
-
-        Parameters
-        ----------
-        drone_model : DroneModel, optional
-            The desired drone type (detailed in an .urdf file in folder `assets`).
-        num_drones : int, optional
-            The desired number of drones in the aviary.
-        neighbourhood_radius : float, optional
-            Radius used to compute the drones' adjacency matrix, in meters.
-        initial_xyzs: ndarray | None, optional
-            (NUM_DRONES, 3)-shaped array containing the initial XYZ position of the drones.
-        initial_rpys: ndarray | None, optional
-            (NUM_DRONES, 3)-shaped array containing the initial orientations of the drones (in radians).
-        physics : Physics, optional
-            The desired implementation of PyBullet physics/custom dynamics.
-        pyb_freq : int, optional
-            The frequency at which PyBullet steps (a multiple of ctrl_freq).
-        ctrl_freq : int, optional
-            The frequency at which the environment steps.
-        gui : bool, optional
-            Whether to use PyBullet's GUI.
-        record : bool, optional
-            Whether to save a video of the simulation.
-        obstacles : bool, optional
-            Whether to add obstacles to the simulation.
-        user_debug_gui : bool, optional
-            Whether to draw the drones' axes and the GUI RPMs sliders.
-        vision_attributes : bool, optional
-            Whether to allocate the attributes needed by vision-based aviary subclasses.
-
-        """
+        self.all_axis = all_axis
         #### Constants #############################################
         self.G = 9.8
         self.RAD2DEG = 180 / np.pi
@@ -116,7 +74,6 @@ class ObstacleBaseAviary(gym.Env):
         self.PYB_TIMESTEP = 1. / self.PYB_FREQ
         #### Parameters ############################################
         self.NUM_DRONES = num_drones
-        self.NUM_OBSTACLES = num_obstacle
         self.NEIGHBOURHOOD_RADIUS = neighbourhood_radius
         #### Options ###############################################
         self.DRONE_MODEL = drone_model
@@ -234,30 +191,38 @@ class ObstacleBaseAviary(gym.Env):
                                                             farVal=1000.0
                                                             )
         #### Set initial poses #####################################
-        if initial_xyzs is None:  # todo 修改初始位置
+        self.keep_init_pos = False
+        if initial_xyzs is None:
             # 0.8:9个随机cell位置，1.0: 16个，1.3: 25个，1.5: 36个,1.8: 49个,2.0: 64个
-            self.cell_pos = generate_non_overlapping_positions_numpy(2)
+            self.cell_pos = generate_non_overlapping_positions_numpy(self.all_axis)
+            # pprint(self.cell_pos)
             # 若需要，同时给定目标位置
             self.need_target = need_target
-            self.INIT_XYZS, self.TARGET_POS, self.obstacle_pos = self.get_init()
+            self.INIT_XYZS, self.TARGET_POS, self.TARGET_POS2 = self.get_init()
         elif np.array(initial_xyzs).shape == (self.NUM_DRONES, 3):
             self.INIT_XYZS = initial_xyzs
+            self.cell_pos = generate_non_overlapping_positions_numpy(self.all_axis)
+            # 若需要，同时给定目标位置
+            self.need_target = need_target
+            _, self.TARGET_POS,  self.TARGET_POS2 = self.get_init()
+            self.keep_init_pos = True   # 表示 我方无人机初始位置 保持为 initial_xyzs
         else:
             print("[ERROR] invalid initial_xyzs in BaseAviary.__init__(), try initial_xyzs.reshape(NUM_DRONES,3)")
+        # 无人机距离初始目标的距离值
+        self.to_target = np.array([np.linalg.norm(self.TARGET_POS[i, :] - self.INIT_XYZS[i, :]) for i in range(3)])
+        # self.to_target2 = np.array([1, 1, 1])
+        self.INIT_Target, self.INIT_Target2 = self.TARGET_POS, self.TARGET_POS2
         if initial_rpys is None:
             self.INIT_RPYS = np.zeros((self.NUM_DRONES, 3))
         elif np.array(initial_rpys).shape == (self.NUM_DRONES, 3):
             self.INIT_RPYS = initial_rpys
         else:
             print("[ERROR] invalid initial_rpys in BaseAviary.__init__(), try initial_rpys.reshape(NUM_DRONES,3)")
-        if self.need_target:
-            self.show_obstacle()
-            self.show_target()
         #### Create action and observation spaces ##################
         self.action_space = self._actionSpace()
         self.observation_space = self._observationSpace(obs_with_act)
         #### Housekeeping ##########################################
-        self._housekeeping()
+        self._housekeeping()  # 状态归零，模型重导入
         #### Update and store the drones kinematic information #####
         self._updateAndStoreKinematicInformation()
         #### Start video recording #################################
@@ -266,54 +231,58 @@ class ObstacleBaseAviary(gym.Env):
     ################################################################################
     def get_init(self):
         """
-        :return: 若需要目标，则返回 无人机+目标 初始位置 init_pos[:3], init_pos[3]/target
+        :return: 若需要目标，则返回 无人机+目标 初始位置 init_pos[:3], 3o3需三个目标位置
         """
         if self.need_target:
-            init_pos = np.stack(random.sample(self.cell_pos, 2 * self.NUM_DRONES+self.NUM_OBSTACLES))
-            return (init_pos[:self.NUM_DRONES], init_pos[self.NUM_DRONES:2 * self.NUM_DRONES],
-                    init_pos[2 * self.NUM_DRONES: 2 * self.NUM_DRONES + self.NUM_OBSTACLES])
+            init_pos = np.stack(random.sample(self.cell_pos, 3 * self.NUM_DRONES))  # 注意这里需要多少内容
+            return (init_pos[:self.NUM_DRONES], init_pos[self.NUM_DRONES: 2 * self.NUM_DRONES],
+                    init_pos[2 * self.NUM_DRONES: 3 * self.NUM_DRONES])
         else:
             init_pos = np.stack(random.sample(self.cell_pos, self.NUM_DRONES))
             # init_pos = np.array([[1, 1, 1], [-1, -1, 0], [1, -1, 1]])
             return init_pos
 
-    def show_obstacle(self):
-        current_dir = os.path.dirname(__file__)
-        target_urdf_path = os.path.join(current_dir, '..', 'assets', 'cylinderg.urdf')
-        modified_pos = []  # 障碍位置
-        for i in range(self.NUM_OBSTACLES):
-            modified_pos.append([self.obstacle_pos[i][0], self.obstacle_pos[i][1], 2.0])
-        self.obstacle_ids = np.array(
-            [p.loadURDF(target_urdf_path,
-                        modified_pos[i],
-                        p.getQuaternionFromEuler([0, 0, 0]), physicsClientId=self.CLIENT,
-                        useFixedBase=True) for i in range(self.NUM_OBSTACLES)])
-
     def show_target(self):
         current_dir = os.path.dirname(__file__)
-        target_urdf_path = os.path.join(current_dir, '..', 'assets', 'cf2p.urdf')
-        for i in range(self.NUM_DRONES):
-            self.target_id = p.loadURDF(target_urdf_path,
-                                        self.TARGET_POS[i],
-                                        p.getQuaternionFromEuler([0, 0, 0]), physicsClientId=self.CLIENT,
-                                        useFixedBase=True)
-            # 设置模型无重力
-            p.changeDynamics(self.target_id, -1, mass=0)  # 将质量设为零，即设置无重力
-            p.changeDynamics(self.target_id, -1, linearDamping=0, angularDamping=0)  # 设置运动类型为静态
-            # 设置模型不受其他碰撞影响
-            p.setCollisionFilterGroupMask(self.target_id, -1, 0, 0)  # 设置碰撞组掩码
-            p.setCollisionFilterPair(-1, -1, self.target_id, -1, 0)  # 设置碰撞对，使模型不与其他对象发生碰撞
+        for k in range(self.NUM_DRONES):    # 设置target组别1
+            if (k % 3) == 0:
+                target_urdf_path = os.path.join(current_dir, '..', 'assets', 'cylinderr.urdf')
+            elif (k % 3) == 1:
+                target_urdf_path = os.path.join(current_dir, '..', 'assets', 'cylinderg.urdf')
+            else:
+                target_urdf_path = os.path.join(current_dir, '..', 'assets', 'cylinderb.urdf')
+            self.TARGET_ID = p.loadURDF(target_urdf_path, self.INIT_Target[k],
+                                        p.getQuaternionFromEuler([0, 0, 0]), physicsClientId=self.CLIENT)
+            # 禁用 self.target_id 的碰撞效果
+            p.setCollisionFilterGroupMask(self.TARGET_ID, -1, 0, 0)
+            # 设置其他模型与 self.target_id 不发生碰撞
+            for model_id in self.DRONE_IDS:
+                p.setCollisionFilterPair(self.TARGET_ID, model_id, -1, -1, enableCollision=False)
+            p.createConstraint(self.TARGET_ID, -1, -1, -1, p.JOINT_FIXED, [0, 0, 0], [0, 0, 0],
+                               self.INIT_Target[k], physicsClientId=self.CLIENT)
+        for k in range(self.NUM_DRONES):    # 设置target组别2
+            if (k % 3) == 0:
+                target_urdf_path = os.path.join(current_dir, '..', 'assets', 'cylinderr.urdf')
+            elif (k % 3) == 1:
+                target_urdf_path = os.path.join(current_dir, '..', 'assets', 'cylinderg.urdf')
+            else:
+                target_urdf_path = os.path.join(current_dir, '..', 'assets', 'cylinderb.urdf')
+            self.TARGET_ID = p.loadURDF(target_urdf_path, self.INIT_Target2[k],
+                                        p.getQuaternionFromEuler([0, 0, 0]), physicsClientId=self.CLIENT)
+            p.setCollisionFilterGroupMask(self.TARGET_ID, -1, 0, 0)
+            for model_id in self.DRONE_IDS:
+                p.setCollisionFilterPair(self.TARGET_ID, model_id, -1, -1, enableCollision=False)
+            p.createConstraint(self.TARGET_ID, -1, -1, -1, p.JOINT_FIXED, [0, 0, 0], [0, 0, 0],
+                               self.INIT_Target2[k], physicsClientId=self.CLIENT)
 
     def update_target_pos(self):
         """
-        更新self.Target_pos 还需要加上self.relative_pos 才得到真实的目标pos
+        更新self.Target_pos 修改为有无人机抵达 target 后轮替 target
         :return:
         """
-        pass
-
-    def _resetDronePosition(self, drone_idx, new_position):
-        # 可能不该使用，真实无人机无法reset
-        pass
+        self.INIT_Target, self.INIT_Target2 = self.TARGET_POS, self.TARGET_POS2
+        return self.TARGET_POS
+        # p.resetBasePositionAndOrientation(self.TARGET_ID, self.TARGET_POS, p.getQuaternionFromEuler([0, 0, 0]))
 
     def convert_obs_dict_to_array(self, obs_dict, if_PO):
         obs_array = []
@@ -353,18 +322,12 @@ class ObstacleBaseAviary(gym.Env):
 
         返回值：initial_obs, Fs # initial_info
         """
-
-        # TODO : initialize random number generator with seed
         p.resetSimulation(physicsClientId=self.CLIENT)
         #### Housekeeping ##########################################
         self._housekeeping()
         #### Update and store the drones kinematic information #####
         self._updateAndStoreKinematicInformation()
-        ####  给定目标位置在 _housekeeping中 ###########################################
-        if self.need_target:
-            # self.TARGET_POS = self.get_init_target()
-            self.show_target()
-            self.show_obstacle()
+        ####  给定目标位置与设置目标碰撞在 _housekeeping中 ###########################################
         #### Start video recording #################################
         self._startVideoRecording()
         #### Return the initial observation ########################
@@ -442,7 +405,10 @@ class ObstacleBaseAviary(gym.Env):
                                                           physicsClientId=self.CLIENT
                                                           ) for i in range(self.NUM_DRONES)]
         else:
-            clipped_action = np.reshape(self._preprocessAction(action), (self.NUM_DRONES, 4))
+            clipped_action, safe_penalty = self._preprocessAction(action)
+            # next_target_pos = self.update_target_pos()
+            # target_action = self._preprocessTargetAction(next_target_pos)
+            # clipped_action = np.reshape(clip_action, (self.NUM_DRONES, 4))
 
         for STEP in range(self.PYB_STEPS_PER_CTRL):
             if self.PYB_STEPS_PER_CTRL > 1 and self.PHYSICS in [Physics.DYN, Physics.PYB_GND, Physics.PYB_DRAG,
@@ -451,14 +417,13 @@ class ObstacleBaseAviary(gym.Env):
 
             for i in range(self.NUM_DRONES):
                 self.apply_physics(clipped_action[i, :], i)
-
+            # self._target_physics(target_action[0, :])
             if self.PHYSICS != Physics.DYN:
                 p.stepSimulation(physicsClientId=self.CLIENT)
             self.last_clipped_action = clipped_action
 
         self._updateAndStoreKinematicInformation()
-        if self.need_target:
-            self.update_target_pos()
+        self.to_target = np.array([np.linalg.norm(self.TARGET_POS[i, :] - self.pos[i, :]) for i in range(3)])
         _obs, if_po = self._computeObs()  # 是否
         obs = self.to_array_obs(_obs, if_po)
         rewards = self._computeReward()
@@ -466,8 +431,7 @@ class ObstacleBaseAviary(gym.Env):
         truncated = self._computeTruncated()
         info = self._computeInfo()
         self.step_counter += (1 * self.PYB_STEPS_PER_CTRL)
-        adjusted_rewards = [reward - 1 * p for reward, p in zip(rewards, punish)]
-
+        adjusted_rewards = [reward - p1 - p2 for reward, p1, p2 in zip(rewards, punish, safe_penalty)]
         return obs, adjusted_rewards, terminated, truncated, info
 
     ################################################################################
@@ -589,22 +553,38 @@ class ObstacleBaseAviary(gym.Env):
         self.ang_v = np.zeros((self.NUM_DRONES, 3))
         if self.PHYSICS == Physics.DYN:
             self.rpy_rates = np.zeros((self.NUM_DRONES, 3))
+        #### 初始化Traget信息!! ##########   先假设只有一个目标
+        self.t_pos = np.zeros((1, 3))
+        self.t_quat = np.zeros((1, 4))
+        self.t_rpy = np.zeros((1, 3))
+        self.t_vel = np.zeros((1, 3))
+        self.t_ang_v = np.zeros((1, 3))
         #### Set PyBullet's parameters #############################
         p.setGravity(0, 0, -self.G, physicsClientId=self.CLIENT)
         p.setRealTimeSimulation(0, physicsClientId=self.CLIENT)
         p.setTimeStep(self.PYB_TIMESTEP, physicsClientId=self.CLIENT)  # 用于设置调用stepSimulation时的步长
         p.setAdditionalSearchPath(pybullet_data.getDataPath(), physicsClientId=self.CLIENT)  # 用于增加导入模型的路径
         #### Load ground plane, drone and obstacles models #########
-        self.INIT_XYZS, self.TARGET_POS, self.obstacle_pos = self.get_init()  # 重新给出位置
+        if self.keep_init_pos:
+            _, self.TARGET_POS, self.TARGET_POS2 = self.get_init()  # 重新给出位置
+        else:
+            self.INIT_XYZS, self.TARGET_POS, self.TARGET_POS2 = self.get_init()  # 重新给出位置
+        self.INIT_Target, self.INIT_Target2 = self.TARGET_POS, self.TARGET_POS2
         self.PLANE_ID = p.loadURDF("plane.urdf", physicsClientId=self.CLIENT)
 
-        self.DRONE_IDS = np.array(
-            [p.loadURDF(pkg_resources.resource_filename('gym_pybullet_drones', 'assets/' + self.URDF),
-                        self.INIT_XYZS[i, :],
-                        p.getQuaternionFromEuler(self.INIT_RPYS[i, :]),
-                        flags=p.URDF_USE_INERTIA_FROM_FILE,
-                        physicsClientId=self.CLIENT
-                        ) for i in range(self.NUM_DRONES)])
+        self.DRONE_IDS = []
+        for k in range(self.NUM_DRONES):
+            if (k % 3) == 0:
+                drone_urdf_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets/' + 'cf2x.urdf')
+            elif (k % 3) == 1:
+                drone_urdf_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets/' + 'cf2xg.urdf')
+            else:
+                drone_urdf_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets/' + 'cf2xb.urdf')
+            self.DRONE_IDS.append(p.loadURDF(drone_urdf_path,
+                                             self.INIT_XYZS[k, :], p.getQuaternionFromEuler(self.INIT_RPYS[k, :]),
+                                             flags=p.URDF_USE_INERTIA_FROM_FILE,
+                                             physicsClientId=self.CLIENT))
+        self.DRONE_IDS = np.array(self.DRONE_IDS)
         #### Remove default damping #################################
         # for i in range(self.NUM_DRONES):
         #     p.changeDynamics(self.DRONE_IDS[i], -1, linearDamping=0, angularDamping=0)
@@ -620,6 +600,8 @@ class ObstacleBaseAviary(gym.Env):
                                      linkIndexB=-1, enableCollision=0, physicsClientId=self.CLIENT)
         if self.OBSTACLES:
             self._addObstacles()
+        if self.need_target:
+            self.show_target()
 
     ################################################################################
 
@@ -634,6 +616,9 @@ class ObstacleBaseAviary(gym.Env):
             self.pos[i], self.quat[i] = p.getBasePositionAndOrientation(self.DRONE_IDS[i], physicsClientId=self.CLIENT)
             self.rpy[i] = p.getEulerFromQuaternion(self.quat[i])
             self.vel[i], self.ang_v[i] = p.getBaseVelocity(self.DRONE_IDS[i], physicsClientId=self.CLIENT)
+        # self.t_pos[0], self.t_quat[0] = p.getBasePositionAndOrientation(self.TARGET_ID, physicsClientId=self.CLIENT)
+        # self.t_rpy[0] = p.getEulerFromQuaternion(self.t_quat[0])
+        # self.t_vel[0], self.t_ang_v[0] = p.getBaseVelocity(self.TARGET_ID, physicsClientId=self.CLIENT)
 
     ################################################################################
 
@@ -659,49 +644,31 @@ class ObstacleBaseAviary(gym.Env):
     ################################################################################
 
     def _getDroneStateVector(self, nth_drone, with_target=False):
-        """Returns the state vector of the n-th drone. todo 修改环境 这里总是要检查的
+        """Returns the state vector of the n-th drone.
 
             (3,   4,    3,   3,    3,       4*n,            4*(n-1),         4)
 
             (pos, quat, rpy, vel, ang_vel, target_pos_dis, other_pos_dis, last_clipped_action)
         """
-        if with_target:
-            pos_for_obstacle = np.zeros(3)
-            for i in range(self.NUM_OBSTACLES):
-                # 计算无人机和障碍物之间的距离
-                delta_pos = self.pos[nth_drone] - self.obstacle_pos[i]
-                distance = np.linalg.norm(delta_pos[:2])
-                if distance < 1:  # 如果距离小于0.5，则更新 pos_for_obstacle
-                    if delta_pos[0] != 0:  # 避免除以零
-                        pos_for_obstacle[0] += np.clip(0.1 / delta_pos[0], -1, 1)  # x方向的倒数
-                    if delta_pos[1] != 0:  # 避免除以零
-                        pos_for_obstacle[1] += np.clip(0.1 / delta_pos[1], -1, 1)  # y方向的倒数
-                    if distance != 0:  # 避免除以零 # 如果距离小于0.5，则更新 pos_for_obstacle
-                        pos_for_obstacle[2] += np.clip(0.1 / distance, -1, 1)  # 总距离的倒数，无方向
-            state_dict = {
-                'pos': pos_for_obstacle,  # self.pos[nth_drone],  # 3
-                'quat': self.quat[nth_drone],  # 4
-                'rpy': self.rpy[nth_drone],  # 3
-                'vel': self.vel[nth_drone],  # 3
-                'ang_vel': self.ang_v[nth_drone],  # 3
-                'target_pos_dis': np.append(self.TARGET_POS[nth_drone] - self.pos[nth_drone],
-                                            np.linalg.norm(self.TARGET_POS[nth_drone] - self.pos[nth_drone]))  # 4
-            }
-            other_pos_dis = []  # 存储智能体指向其他智能体的向量和距离 4*(N-1)
-            for i in range(self.NUM_DRONES):
-                if i != nth_drone:
-                    pos = self.pos[i, :] - self.pos[nth_drone, :]
-                    dis = np.linalg.norm(self.pos[i, :] - self.pos[nth_drone, :])
-                    other_pos_dis.append(np.append(pos, dis))
-            state_dict['other_pos_dis'] = np.array(other_pos_dis).flatten()  # 合并后的向量和距离
-            # state_dict['last_clipped_action'] = self.last_clipped_action[nth_drone, :]  # 动作在RL文件中读取的
-            return state_dict
-
-        else:  # 不需要目标位置
-            state = np.hstack([self.pos[nth_drone, :], self.quat[nth_drone, :], self.rpy[nth_drone, :],
-                               self.vel[nth_drone, :], self.ang_v[nth_drone, :],
-                               self.last_clipped_action[nth_drone, :]])
-            return state.reshape(20, )
+        # self.to_target2[nth_drone] = np.linalg.norm(self.TARGET_POS2[nth_drone, :] - self.pos[nth_drone, :])
+        state_dict = {
+            'pos': self.pos[nth_drone, :],  # 3
+            'quat': self.quat[nth_drone, :],  # 4
+            'rpy': self.rpy[nth_drone, :],  # 3
+            'vel': self.vel[nth_drone, :],  # 3
+            'ang_vel': self.ang_v[nth_drone, :],  # 3
+            'target_pos_dis': np.append(self.TARGET_POS[nth_drone, :] - self.pos[nth_drone, :],
+                                        self.to_target[nth_drone])  # 4
+        }
+        other_pos_dis = []  # 存储智能体指向其他智能体的向量和距离 4*(N-1)
+        for i in range(self.NUM_DRONES):
+            if i != nth_drone:
+                pos = self.pos[i, :] - self.pos[nth_drone, :]
+                dis = np.linalg.norm(self.pos[i, :] - self.pos[nth_drone, :])
+                other_pos_dis.append(np.append(pos, dis))
+        state_dict['other_pos_dis'] = np.array(other_pos_dis).flatten()  # 合并后的向量和距离
+        # state_dict['last_clipped_action'] = self.last_clipped_action[nth_drone, :]  # 动作在RL文件中读取的
+        return state_dict
 
     ################################################################################
 
@@ -848,6 +815,29 @@ class ObstacleBaseAviary(gym.Env):
                                  physicsClientId=self.CLIENT
                                  )
         p.applyExternalTorque(self.DRONE_IDS[nth_drone],
+                              4,
+                              torqueObj=[0, 0, z_torque],
+                              flags=p.LINK_FRAME,
+                              physicsClientId=self.CLIENT
+                              )
+
+    def _target_physics(self,
+                        rpm
+                        ):
+        forces = np.array(rpm ** 2) * self.KF
+        torques = np.array(rpm ** 2) * self.KM
+        if self.DRONE_MODEL == DroneModel.RACE:
+            torques = -torques
+        z_torque = (-torques[0] + torques[1] - torques[2] + torques[3])
+        for i in range(4):
+            p.applyExternalForce(self.TARGET_ID,
+                                 i,
+                                 forceObj=[0, 0, forces[i]],
+                                 posObj=[0, 0, 0],
+                                 flags=p.LINK_FRAME,
+                                 physicsClientId=self.CLIENT
+                                 )
+        p.applyExternalTorque(self.TARGET_ID,
                               4,
                               torqueObj=[0, 0, z_torque],
                               flags=p.LINK_FRAME,
@@ -1194,16 +1184,11 @@ class ObstacleBaseAviary(gym.Env):
     def _preprocessAction(self,
                           action
                           ):
-        """Pre-processes the action passed to `.step()` into motors' RPMs.
+        raise NotImplementedError
 
-        Must be implemented in a subclass.
-
-        Parameters
-        ----------
-        action : ndarray | dict[..]
-            The input action for one or more drones, to be translated into RPMs.
-
-        """
+    def _preprocessTargetAction(self,
+                                action
+                                ):
         raise NotImplementedError
 
     ################################################################################

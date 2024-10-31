@@ -23,8 +23,8 @@ def generate_non_overlapping_positions_numpy(scale=1.0):
     返回:
     list: 生成的位置列表，每个位置为(x, y, z)的元组。
     """
-    cell_size = 0.5     # 单元格大小固定为0.4
-    total_range = 2 * scale    # 计算新的总范围
+    cell_size = 0.5  # 单元格大小固定为0.4
+    total_range = 2 * scale  # 计算新的总范围
     divisions = int(total_range / cell_size)
     # 生成所有可能的单元格坐标
     cell_coordinates = np.array(
@@ -34,12 +34,12 @@ def generate_non_overlapping_positions_numpy(scale=1.0):
     for cell_coord in cell_coordinates:  # 在每个单元格内随机生成一个位置
         x = np.random.uniform(cell_coord[0] * cell_size - scale, (cell_coord[0] + 1) * cell_size - scale)
         y = np.random.uniform(cell_coord[1] * cell_size - scale, (cell_coord[1] + 1) * cell_size - scale)
-        z = np.random.uniform(0.2, 1.2)  # 保持z范围不变
+        z = np.random.uniform(0., 2.)  # 保持z范围不变
         positions.append((x, y, z))
     return positions
 
 
-class A3o1Base(gym.Env):
+class A3o3Base(gym.Env):
     def __init__(self,
                  drone_model: DroneModel = DroneModel.CF2X,
                  num_drones: int = 1,
@@ -59,6 +59,7 @@ class A3o1Base(gym.Env):
                  obs_with_act=False,
                  all_axis=2,
                  ):
+        self.all_axis = all_axis
         #### Constants #############################################
         self.G = 9.8
         self.RAD2DEG = 180 / np.pi
@@ -192,18 +193,18 @@ class A3o1Base(gym.Env):
         self.keep_init_pos = False
         if initial_xyzs is None:
             # 0.8:9个随机cell位置，1.0: 16个，1.3: 25个，1.5: 36个,1.8: 49个,2.0: 64个
-            self.cell_pos = generate_non_overlapping_positions_numpy(5)
+            self.cell_pos = generate_non_overlapping_positions_numpy(self.all_axis)
             # pprint(self.cell_pos)
             # 若需要，同时给定目标位置
             self.need_target = need_target
-            self.INIT_XYZS, self.TARGET_POS, self.END_Target = self.get_init()
+            self.INIT_XYZS, self.TARGET_POS = self.get_init()
             self.INIT_Target = self.TARGET_POS
         elif np.array(initial_xyzs).shape == (self.NUM_DRONES, 3):
             self.INIT_XYZS = initial_xyzs
-            self.cell_pos = generate_non_overlapping_positions_numpy(5)
+            self.cell_pos = generate_non_overlapping_positions_numpy(self.all_axis)
             # 若需要，同时给定目标位置
             self.need_target = need_target
-            _, self.TARGET_POS, self.END_Target = self.get_init()
+            _, self.TARGET_POS = self.get_init()
             self.keep_init_pos = True
         else:
             print("[ERROR] invalid initial_xyzs in BaseAviary.__init__(), try initial_xyzs.reshape(NUM_DRONES,3)")
@@ -226,11 +227,11 @@ class A3o1Base(gym.Env):
     ################################################################################
     def get_init(self):
         """
-        :return: 若需要目标，则返回 无人机+目标 初始位置 init_pos[:3], 3v1只需一个目标位置
+        :return: 若需要目标，则返回 无人机+目标 初始位置 init_pos[:3], 3o3需三个目标位置
         """
         if self.need_target:
-            init_pos = np.stack(random.sample(self.cell_pos, 2 + self.NUM_DRONES))
-            return init_pos[:self.NUM_DRONES], init_pos[self.NUM_DRONES], init_pos[self.NUM_DRONES + 1]
+            init_pos = np.stack(random.sample(self.cell_pos, 2 * self.NUM_DRONES))  # 注意这里需要多少内容
+            return init_pos[:self.NUM_DRONES], init_pos[self.NUM_DRONES: 2 * self.NUM_DRONES]
         else:
             init_pos = np.stack(random.sample(self.cell_pos, self.NUM_DRONES))
             # init_pos = np.array([[1, 1, 1], [-1, -1, 0], [1, -1, 1]])
@@ -238,15 +239,22 @@ class A3o1Base(gym.Env):
 
     def show_target(self):
         current_dir = os.path.dirname(__file__)
-        target_urdf_path = os.path.join(current_dir, '..', 'assets', 'cf2p.urdf')
-        self.TARGET_ID = p.loadURDF(target_urdf_path,
-                                    self.INIT_Target,
-                                    p.getQuaternionFromEuler([0, 0, 0]), physicsClientId=self.CLIENT)
-        # 禁用 self.target_id 的碰撞效果
-        p.setCollisionFilterGroupMask(self.TARGET_ID, -1, 0, 0)
-        # 设置其他模型与 self.target_id 不发生碰撞
-        for model_id in self.DRONE_IDS:
-            p.setCollisionFilterPair(self.TARGET_ID, model_id, -1, -1, enableCollision=False)
+        for k in range(self.NUM_DRONES):
+            if (k % 3) == 0:
+                target_urdf_path = os.path.join(current_dir, '..', 'assets', 'cylinderr.urdf')
+            elif (k % 3) == 1:
+                target_urdf_path = os.path.join(current_dir, '..', 'assets', 'cylinderg.urdf')
+            else:
+                target_urdf_path = os.path.join(current_dir, '..', 'assets', 'cylinderb.urdf')
+            self.TARGET_ID = p.loadURDF(target_urdf_path, self.INIT_Target[k],
+                                        p.getQuaternionFromEuler([0, 0, 0]), physicsClientId=self.CLIENT)
+            # 禁用 self.target_id 的碰撞效果
+            p.setCollisionFilterGroupMask(self.TARGET_ID, -1, 0, 0)
+            # 设置其他模型与 self.target_id 不发生碰撞
+            for model_id in self.DRONE_IDS:
+                p.setCollisionFilterPair(self.TARGET_ID, model_id, -1, -1, enableCollision=False)
+            p.createConstraint(self.TARGET_ID, -1, -1, -1, p.JOINT_FIXED, [0, 0, 0], [0, 0, 0],
+                               self.INIT_Target[k], physicsClientId=self.CLIENT)
 
     def get_new_target_position(self, total_steps=12000):
         # 计算圆心和半径
@@ -401,8 +409,8 @@ class A3o1Base(gym.Env):
                                                           ) for i in range(self.NUM_DRONES)]
         else:
             clipped_action, safe_penalty = self._preprocessAction(action)
-            next_target_pos = self.update_target_pos()
-            target_action = self._preprocessTargetAction(next_target_pos)
+            # next_target_pos = self.update_target_pos()
+            # target_action = self._preprocessTargetAction(next_target_pos)
             # clipped_action = np.reshape(clip_action, (self.NUM_DRONES, 4))
 
         for STEP in range(self.PYB_STEPS_PER_CTRL):
@@ -412,7 +420,7 @@ class A3o1Base(gym.Env):
 
             for i in range(self.NUM_DRONES):
                 self.apply_physics(clipped_action[i, :], i)
-            self._target_physics(target_action[0, :])
+            # self._target_physics(target_action[0, :])
             if self.PHYSICS != Physics.DYN:
                 p.stepSimulation(physicsClientId=self.CLIENT)
             self.last_clipped_action = clipped_action
@@ -561,19 +569,25 @@ class A3o1Base(gym.Env):
         p.setAdditionalSearchPath(pybullet_data.getDataPath(), physicsClientId=self.CLIENT)  # 用于增加导入模型的路径
         #### Load ground plane, drone and obstacles models #########
         if self.keep_init_pos:
-            _, self.TARGET_POS, self.END_Target = self.get_init()  # 重新给出位置
+            _, self.TARGET_POS = self.get_init()  # 重新给出位置
         else:
-            self.INIT_XYZS, self.TARGET_POS, self.END_Target = self.get_init()  # 重新给出位置
+            self.INIT_XYZS, self.TARGET_POS = self.get_init()  # 重新给出位置
         self.INIT_Target = self.TARGET_POS
         self.PLANE_ID = p.loadURDF("plane.urdf", physicsClientId=self.CLIENT)
 
-        self.DRONE_IDS = np.array(
-            [p.loadURDF(pkg_resources.resource_filename('gym_pybullet_drones', 'assets/' + self.URDF),
-                        self.INIT_XYZS[i, :],
-                        p.getQuaternionFromEuler(self.INIT_RPYS[i, :]),
-                        flags=p.URDF_USE_INERTIA_FROM_FILE,
-                        physicsClientId=self.CLIENT
-                        ) for i in range(self.NUM_DRONES)])
+        self.DRONE_IDS = []
+        for k in range(self.NUM_DRONES):
+            if (k % 3) == 0:
+                drone_urdf_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets/' + 'cf2x.urdf')
+            elif (k % 3) == 1:
+                drone_urdf_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets/' + 'cf2xg.urdf')
+            else:
+                drone_urdf_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets/' + 'cf2xb.urdf')
+            self.DRONE_IDS.append(p.loadURDF(drone_urdf_path,
+                                             self.INIT_XYZS[k, :], p.getQuaternionFromEuler(self.INIT_RPYS[k, :]),
+                                             flags=p.URDF_USE_INERTIA_FROM_FILE,
+                                             physicsClientId=self.CLIENT))
+        self.DRONE_IDS = np.array(self.DRONE_IDS)
         #### Remove default damping #################################
         # for i in range(self.NUM_DRONES):
         #     p.changeDynamics(self.DRONE_IDS[i], -1, linearDamping=0, angularDamping=0)
@@ -605,9 +619,9 @@ class A3o1Base(gym.Env):
             self.pos[i], self.quat[i] = p.getBasePositionAndOrientation(self.DRONE_IDS[i], physicsClientId=self.CLIENT)
             self.rpy[i] = p.getEulerFromQuaternion(self.quat[i])
             self.vel[i], self.ang_v[i] = p.getBaseVelocity(self.DRONE_IDS[i], physicsClientId=self.CLIENT)
-        self.t_pos[0], self.t_quat[0] = p.getBasePositionAndOrientation(self.TARGET_ID, physicsClientId=self.CLIENT)
-        self.t_rpy[0] = p.getEulerFromQuaternion(self.t_quat[0])
-        self.t_vel[0], self.t_ang_v[0] = p.getBaseVelocity(self.TARGET_ID, physicsClientId=self.CLIENT)
+        # self.t_pos[0], self.t_quat[0] = p.getBasePositionAndOrientation(self.TARGET_ID, physicsClientId=self.CLIENT)
+        # self.t_rpy[0] = p.getEulerFromQuaternion(self.t_quat[0])
+        # self.t_vel[0], self.t_ang_v[0] = p.getBaseVelocity(self.TARGET_ID, physicsClientId=self.CLIENT)
 
     ################################################################################
 
@@ -645,8 +659,8 @@ class A3o1Base(gym.Env):
             'rpy': self.rpy[nth_drone, :],  # 3
             'vel': self.vel[nth_drone, :],  # 3
             'ang_vel': self.ang_v[nth_drone, :],  # 3
-            'target_pos_dis': np.append(self.TARGET_POS[:] - self.pos[nth_drone, :],
-                                        np.linalg.norm(self.TARGET_POS[:] - self.pos[nth_drone, :]))  # 4
+            'target_pos_dis': np.append(self.TARGET_POS[nth_drone, :] - self.pos[nth_drone, :],
+                                        np.linalg.norm(self.TARGET_POS[nth_drone, :] - self.pos[nth_drone, :]))  # 4
         }
         other_pos_dis = []  # 存储智能体指向其他智能体的向量和距离 4*(N-1)
         for i in range(self.NUM_DRONES):
