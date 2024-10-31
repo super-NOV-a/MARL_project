@@ -61,7 +61,7 @@ class A3o3(A3o3RL):
         v = np.linalg.norm(velocity, axis=1)  # 计算速度的 L2 范数
 
         rewards += 30 * np.power(20, -dis_to_target[:, -1])  # 距离目标奖励
-        rewards -= 10 * v  # 速度惩罚
+        rewards -= 20 * v  # 速度惩罚
         rewards += np.sum(velocity * dis_to_target[:, :3], axis=1) / (v * dis_to_target[:, -1])  # 相似度奖励
         rewards += 10 * np.power(20, -np.abs(dis_to_target[:, 2]))  # 高度奖励
         # rewards -= 0.1* np.linalg.norm(velocity - self.last_v, axis=1) / np.where(v > 0, v, 1)  # 加速度惩罚

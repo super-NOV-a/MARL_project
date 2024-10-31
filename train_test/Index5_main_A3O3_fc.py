@@ -158,9 +158,9 @@ if __name__ == '__main__':
     parser.add_argument("--batch_size", type=int, default=1024, help="Batch size")  # 1024-》4048
     parser.add_argument("--hidden_dim", type=int, default=64,
                         help="The number of neurons in hidden layers of the neural network")
-    parser.add_argument("--noise_std_init", type=float, default=0.1, help="The std of Gaussian noise for exploration")
+    parser.add_argument("--noise_std_init", type=float, default=0.05, help="The std of Gaussian noise for exploration")
     parser.add_argument("--noise_std_min", type=float, default=0, help="The std of Gaussian noise for exploration")
-    parser.add_argument("--noise_decay_steps", type=float, default=3e5,
+    parser.add_argument("--noise_decay_steps", type=float, default=1e6,
                         help="How many steps before the noise_std decays to the minimum")
     parser.add_argument("--use_noise_decay", type=bool, default=True, help="Whether to decay the noise_std")
     parser.add_argument("--lr_a", type=float, default=5e-4, help="Learning rate of actor")
