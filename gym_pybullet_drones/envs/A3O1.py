@@ -1,9 +1,9 @@
 import numpy as np
-from gym_pybullet_drones.envs.C3V1RLAviary import C3V1RLAviary
+from gym_pybullet_drones.envs.A3O1RL import A3o1RL
 from gym_pybullet_drones.utils.enums import DroneModel, Physics, ActionType, ObservationType
 
 
-class C3V1(C3V1RLAviary):
+class A3o1(A3o1RL):
     """Multi-agent RL problem: 3 VS 1 3d."""
     def __init__(self,
                  drone_model: DroneModel = DroneModel.CF2X,
@@ -72,7 +72,7 @@ class C3V1(C3V1RLAviary):
         if self.NUM_DRONES > 1:
             other_pos_dis = np.array([state['other_pos_dis'] for state in states.values()])
             dist_between_drones = other_pos_dis[:, 3::4]  # 获取距离
-            rewards -= 2 * np.sum(100 * np.power(5, (-4 * dist_between_drones - 1)) - 0.2, axis=1)
+            rewards -= np.sum(100 * np.power(5, (-4 * dist_between_drones - 1)) - 0.2, axis=1)
         return rewards
 
     ################################################################################

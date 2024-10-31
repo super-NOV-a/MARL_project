@@ -1,7 +1,5 @@
 import itertools
-
 import numpy as np
-
 import pybullet as p
 from gym_pybullet_drones.envs.LyyRLAviary import LyyRLAviary
 from gym_pybullet_drones.utils.enums import DroneModel, Physics, ActionType, ObservationType
@@ -128,7 +126,7 @@ class Spread3dAviary(LyyRLAviary):
             if self.NUM_DRONES != 1:
                 for j in range(self.NUM_DRONES-1):
                     dist_between_drones = np.linalg.norm(states[i]['other_pos'][0+j*3: 3+j*3])
-                    if dist_between_drones < 0.13:  # 碰撞体积为圆柱形，0.12米为碰撞直径
+                    if dist_between_drones < 0.1:  # 碰撞体积为圆柱形，0.1米为碰撞直径
                         ret[i] -= 10
         return ret
 

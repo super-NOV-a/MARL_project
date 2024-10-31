@@ -4,7 +4,6 @@ import time
 from datetime import datetime
 import xml.etree.ElementTree as etxml
 from pprint import pprint
-
 import pkg_resources
 from PIL import Image
 import numpy as np
@@ -35,12 +34,12 @@ def generate_non_overlapping_positions_numpy(scale=1.0):
     for cell_coord in cell_coordinates:  # 在每个单元格内随机生成一个位置
         x = np.random.uniform(cell_coord[0] * cell_size - scale, (cell_coord[0] + 1) * cell_size - scale)
         y = np.random.uniform(cell_coord[1] * cell_size - scale, (cell_coord[1] + 1) * cell_size - scale)
-        z = np.random.uniform(0., 2.)  # 保持z范围不变
+        z = np.random.uniform(0.2, 1.2)  # 保持z范围不变
         positions.append((x, y, z))
     return positions
 
 
-class C3V1BaseAviary(gym.Env):
+class A3o1Base(gym.Env):
     def __init__(self,
                  drone_model: DroneModel = DroneModel.CF2X,
                  num_drones: int = 1,
@@ -60,7 +59,6 @@ class C3V1BaseAviary(gym.Env):
                  obs_with_act=False,
                  all_axis=2,
                  ):
-        self.all_axis = all_axis
         #### Constants #############################################
         self.G = 9.8
         self.RAD2DEG = 180 / np.pi
@@ -194,7 +192,7 @@ class C3V1BaseAviary(gym.Env):
         self.keep_init_pos = False
         if initial_xyzs is None:
             # 0.8:9个随机cell位置，1.0: 16个，1.3: 25个，1.5: 36个,1.8: 49个,2.0: 64个
-            self.cell_pos = generate_non_overlapping_positions_numpy(self.all_axis)
+            self.cell_pos = generate_non_overlapping_positions_numpy(5)
             # pprint(self.cell_pos)
             # 若需要，同时给定目标位置
             self.need_target = need_target
@@ -202,7 +200,7 @@ class C3V1BaseAviary(gym.Env):
             self.INIT_Target = self.TARGET_POS
         elif np.array(initial_xyzs).shape == (self.NUM_DRONES, 3):
             self.INIT_XYZS = initial_xyzs
-            self.cell_pos = generate_non_overlapping_positions_numpy(self.all_axis)
+            self.cell_pos = generate_non_overlapping_positions_numpy(5)
             # 若需要，同时给定目标位置
             self.need_target = need_target
             _, self.TARGET_POS, self.END_Target = self.get_init()

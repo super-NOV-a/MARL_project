@@ -15,6 +15,7 @@ Env_name = 'c3v1G'  # 'spread3d', 'simple_spread'  c3v1G是GAT,c3v1G2是GCN，�
 action = 'vel'
 observation = 'kin_target'  # 相比kin_target 观测会多一个Fs
 # 现在将观测范围增加到[-5,5]吧
+is_normed = False
 
 
 class Normalizer:
@@ -68,13 +69,13 @@ class Runner:
         self.number = args.N_drones
         self.seed = 1145  # 保证一个seed，名称使用记号--mark
         self.mark = args.mark
-        self.load_mark = 9235
+        self.load_mark = None   # 9235
         self.args.share_prob = 0.05  # 还是别共享了，有些无用
         Ctrl_Freq = args.Ctrl_Freq  # 30
-        self.env = C3V1(gui=False, num_drones=args.N_drones, obs=ObservationType(observation),
+        self.env = C3V1(gui=True, num_drones=args.N_drones, obs=ObservationType(observation),
                         act=ActionType(action),
                         ctrl_freq=Ctrl_Freq,  # 这个值越大，仿真看起来越慢，应该是由于频率变高，速度调整的更小了
-                        need_target=True, obs_with_act=True, all_axis=5)
+                        need_target=True, obs_with_act=True, all_axis=2)
         self.timestep = 1 / Ctrl_Freq  # 计算每个步骤的时间间隔 0.003
         self.args.obs_dim_n = [self.env.observation_space[i].shape[0] for i in
                                range(self.args.N_drones)]  # obs dimensions of N agents
@@ -118,15 +119,18 @@ class Runner:
                 self.agent_n[agent_id].actor.load_state_dict(torch.load(model_path))
 
     def run(self):
-        normalizers = [Normalizer(shape=28) for _ in range(self.args.N_drones)]  # 每个智能体一个归一化器
+        if is_normed:
+            print('使用了观测是Normalization')
+            normalizers = [Normalizer(shape=28) for _ in range(self.args.N_drones)]  # 每个智能体一个归一化器
 
         while self.total_steps < self.args.max_train_steps:
             obs_n, _ = self.env.reset()  # gym new api
-            # 动态更新均值和方差
-            for i, obs in enumerate(obs_n):
-                normalizers[i].update(obs)
-            # 对观测进行归一化
-            obs_n = [normalizers[i].normalize(obs) for i, obs in enumerate(obs_n)]
+            if is_normed:
+                # 动态更新均值和方差
+                for i, obs in enumerate(obs_n):
+                    normalizers[i].update(obs)
+                # 对观测进行归一化
+                obs_n = [normalizers[i].normalize(obs) for i, obs in enumerate(obs_n)]
 
             episode_total_reward = 0  # 当前episode的总奖励
             agent_rewards = [0] * self.args.N_drones  # 每个智能体的累计奖励
@@ -138,10 +142,11 @@ class Runner:
 
                 # 执行动作并获取新的观测和奖励
                 obs_next_n, rewards_n, done_n, _, _ = self.env.step(copy.deepcopy(actions_n))  # gym new api
-                # 更新新观测的均值和方差并归一化
-                for i, obs_next in enumerate(obs_next_n):
-                    normalizers[i].update(obs_next)
-                obs_next_n = [normalizers[i].normalize(obs_next) for i, obs_next in enumerate(obs_next_n)]
+                if is_normed:
+                    # 更新新观测的均值和方差并归一化
+                    for i, obs_next in enumerate(obs_next_n):
+                        normalizers[i].update(obs_next)
+                    obs_next_n = [normalizers[i].normalize(obs_next) for i, obs_next in enumerate(obs_next_n)]
 
                 # 存储经验
                 self.replay_buffer.store_transition(obs_n, actions_n, rewards_n, obs_next_n, done_n)
@@ -161,9 +166,10 @@ class Runner:
                 if self.total_steps % self.args.evaluate_freq == 0:
                     self.save_model()
                     obs_n, _ = self.env.reset()  # gym new api
-                    for i, obs in enumerate(obs_n):
-                        normalizers[i].update(obs)
-                    obs_n = [normalizers[i].normalize(obs) for i, obs in enumerate(obs_n)]
+                    if is_normed:
+                        for i, obs in enumerate(obs_n):
+                            normalizers[i].update(obs)
+                        obs_n = [normalizers[i].normalize(obs) for i, obs in enumerate(obs_n)]
 
                 if all(done_n):
                     break
@@ -183,7 +189,8 @@ class Runner:
 
             self.writer.add_scalar(f'train_step_rewards_{self.env_name}', int(episode_total_reward),
                                    global_step=self.total_steps)
-        self.save_normalizers('./model/normalizers.pkl', normalizers)
+        if is_normed:
+            self.save_normalizers('./model/normalizers.pkl', normalizers)
         self.env.close()
 
     def save_model(self):
@@ -224,7 +231,7 @@ if __name__ == '__main__':
     check_create_dir(Env_name, 'model')
     parser = argparse.ArgumentParser("Hyperparameters Setting for MADDPG and MATD3 in MPE environment")
     parser.add_argument("--max_train_steps", type=int, default=int(1e6), help=" Maximum number of training steps")
-    parser.add_argument("--episode_limit", type=int, default=2000, help="Maximum number of steps per episode")
+    parser.add_argument("--episode_limit", type=int, default=1000, help="Maximum number of steps per episode")
     parser.add_argument("--test_episode_limit", type=int, default=2000, help="Maximum number of steps per test episode")
     parser.add_argument("--evaluate_freq", type=float, default=100000,
                         help="Evaluate the policy every 'evaluate_freq' steps")
@@ -241,8 +248,8 @@ if __name__ == '__main__':
     parser.add_argument("--noise_decay_steps", type=float, default=3e5,
                         help="How many steps before the noise_std decays to the minimum")
     parser.add_argument("--use_noise_decay", type=bool, default=True, help="Whether to decay the noise_std")
-    parser.add_argument("--lr_a", type=float, default=5e-4, help="Learning rate of actor")
-    parser.add_argument("--lr_c", type=float, default=5e-4, help="Learning rate of critic")
+    parser.add_argument("--lr_a", type=float, default=1e-4, help="Learning rate of actor")
+    parser.add_argument("--lr_c", type=float, default=1e-4, help="Learning rate of critic")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--tau", type=float, default=0.01, help="Softly update the target network")
     parser.add_argument("--use_orthogonal_init", type=bool, default=True, help="Orthogonal initialization")

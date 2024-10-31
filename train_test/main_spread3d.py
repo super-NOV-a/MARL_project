@@ -1,12 +1,11 @@
-import time
 import torch
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 from env.make_env import make_env
 import argparse
-from ..utils.replay_buffer import ReplayBuffer
-from ..utils.maddpg import MADDPG
-from ..utils.matd3 import MATD3
+from train_test.utils.replay_buffer import ReplayBuffer
+from train_test.utils.maddpg import MADDPG
+from train_test.utils.matd3 import MATD3
 import copy
 from gym_pybullet_drones.envs.Spread3d import Spread3dAviary
 from gym_pybullet_drones.utils.enums import ObservationType, ActionType
@@ -27,14 +26,14 @@ class Runner:
         # Create env
         if self.env_name == 'spread3d':
             Ctrl_Freq = args.Ctrl_Freq  # 30
-            self.env = Spread3dAviary(gui=False, num_drones=args.N_drones, obs=ObservationType('kin_target'),
+            self.env = Spread3dAviary(gui=True, num_drones=args.N_drones, obs=ObservationType('kin_target'),
                                       act=ActionType(action),
                                       ctrl_freq=Ctrl_Freq,  # 这个值越大，仿真看起来越慢，应该是由于频率变高，速度调整的更小了
                                       need_target=True, obs_with_act=True)
-            self.env_evaluate = Spread3dAviary(gui=False, num_drones=args.N_drones, obs=ObservationType('kin_target'),
-                                               act=ActionType(action),
-                                               ctrl_freq=Ctrl_Freq,
-                                               need_target=True, obs_with_act=True)
+            # self.env_evaluate = Spread3dAviary(gui=False, num_drones=args.N_drones, obs=ObservationType('kin_target'),
+            #                                    act=ActionType(action),
+            #                                    ctrl_freq=Ctrl_Freq,
+            #                                    need_target=True, obs_with_act=True)
             self.timestep = 1 / Ctrl_Freq  # 计算每个步骤的时间间隔 0.003
 
             # self.env.observation_space.shape = box[N,78]
@@ -170,7 +169,7 @@ class Runner:
                                    global_step=self.total_steps)
 
         self.env.close()
-        self.env_evaluate.close()
+        # self.env_evaluate.close()
 
     def evaluate_policy(self, ):
         evaluate_reward = 0

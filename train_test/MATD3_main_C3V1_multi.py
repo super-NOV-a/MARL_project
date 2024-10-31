@@ -4,13 +4,13 @@ import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 import argparse
 import copy
-from utils.replay_buffer_multi_step import ReplayBuffer
+from utils.replay_buffer_p import ReplayBuffer
 from utils.maddpg import MADDPG
-from utils.matd3_attention import MATD3
+from utils.matd3_graph_multi import MATD3
 from gym_pybullet_drones.envs.C3V1 import C3V1
 from gym_pybullet_drones.utils.enums import ObservationType, ActionType
 
-Env_name = 'c3v1Am'  # 'spread3d', 'simple_spread'
+Env_name = 'c3v1Gm'  # 'spread3d', 'simple_spread'
 action = 'vel'
 observation = 'kin_target'  # 相比kin_target 观测会多一个Fs
 
@@ -25,9 +25,9 @@ class Runner:
         self.mark = args.mark
         self.load_mark = None
         self.args.share_prob = 0.05  # 还是别共享了，有些无用
-        self.args.n_step = 3
+        self.args.n_step = 1
         Ctrl_Freq = args.Ctrl_Freq  # 30
-        self.env = C3V1(gui=False, num_drones=args.N_drones, obs=ObservationType(observation),
+        self.env = C3V1(gui=True, num_drones=args.N_drones, obs=ObservationType(observation),
                         act=ActionType(action),
                         ctrl_freq=Ctrl_Freq,  # 这个值越大，仿真看起来越慢，应该是由于频率变高，速度调整的更小了
                         need_target=True, obs_with_act=True)
@@ -78,37 +78,39 @@ class Runner:
                                                                                                   agent_id)  # agent_id
                 self.agent_n[agent_id].actor.load_state_dict(torch.load(model_path))
 
-    def run(self, ):
+    def run(self):
         while self.total_steps < self.args.max_train_steps:
             obs_n, _ = self.env.reset()  # gym new api
-            episode_total_reward = 0  # 改进：train_reward -> episode_total_reward，表示当前episode的总奖励
-            agent_rewards = [0] * self.args.N_drones  # 改进：rewards_n -> agent_rewards，表示每个智能体的累计奖励
+            episode_total_reward = 0
+            agent_rewards = [0] * self.args.N_drones
 
             for count in range(self.args.episode_limit):
-
                 actions_n = [agent.choose_action(obs, noise_std=self.noise_std) for agent, obs in
                              zip(self.agent_n, obs_n)]
                 obs_next_n, rewards_n, done_n, _, _ = self.env.step(copy.deepcopy(actions_n))  # gym new api
-                # obs_next_n = self.convert_wrap(obs_next_n)
 
+                # Store transition in replay buffer
                 self.replay_buffer.store_transition(obs_n, actions_n, rewards_n, obs_next_n, done_n)
                 obs_n = obs_next_n
-                episode_total_reward += np.mean(rewards_n)  # 当前episode的总奖励
+                episode_total_reward += np.mean(rewards_n)
                 agent_rewards = [cumulative_reward + reward for cumulative_reward, reward in
-                                 zip(agent_rewards, rewards_n)]  # 每个智能体的累计奖励
+                                 zip(agent_rewards, rewards_n)]
                 self.total_steps += 1
 
+                # Update noise standard deviation
                 if self.args.use_noise_decay:
-                    self.noise_std = self.noise_std - self.args.noise_std_decay if self.noise_std - self.args.noise_std_decay > self.args.noise_std_min else self.args.noise_std_min
+                    self.noise_std = max(self.noise_std - self.args.noise_std_decay, self.args.noise_std_min)
 
+                # Model evaluation and saving
                 if self.total_steps % self.args.evaluate_freq == 0:
                     # self.evaluate_policy()
-                    self.save_model()  # 评估中实现save了
+                    self.save_model()  # Save model during evaluation
                     obs_n, _ = self.env.reset()  # gym new api
 
                 if all(done_n):
                     break
 
+            # Train agents if there is enough experience in replay buffer
             if self.replay_buffer.current_size > self.args.batch_size:
                 for _ in range(50):
                     for agent_id in range(self.args.N_drones):
@@ -119,10 +121,10 @@ class Runner:
 
             for agent_id, cumulative_reward in enumerate(agent_rewards):
                 self.writer.add_scalar(f'Agent_{agent_id}_train_reward', int(cumulative_reward),
-                                       global_step=self.total_steps)
+                                       global_step=int(self.total_steps/10))
 
             self.writer.add_scalar(f'train_step_rewards_{self.env_name}', int(episode_total_reward),
-                                   global_step=self.total_steps)
+                                   global_step=int(self.total_steps/10))
 
         self.env.close()
         self.env_evaluate.close()
